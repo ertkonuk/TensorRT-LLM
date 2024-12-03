@@ -227,6 +227,11 @@ class MultimodalModelRunner:
             from transformers import NougatTokenizerFast
             self.tokenizer = NougatTokenizerFast.from_pretrained(
                 self.args.hf_model_dir)
+        elif self.model_type == 'pixtral':
+            use_fast =  True
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                self.args.hf_model_dir, use_fast=use_fast, use_legacy=False)
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
         elif self.model_type == 'neva' or self.model_type == 'video-neva':
             from sentencepiece import SentencePieceProcessor
 
@@ -1033,6 +1038,23 @@ class MultimodalModelRunner:
             pre_prompt = "<extra_id_0>System\n\n<extra_id_1>User\n"
             post_prompt = f"\n{input_text}\n<extra_id_1>Assistant\n"
 
+        elif self.model_type == "pixtral":
+            from transformers import PixtralImageProcessor
+            image_processor_path = os.path.join(self.args.visual_engine_dir, 'image_processor')
+            image_processor = PixtralImageProcessor.from_pretrained(image_processor_path, torch_dtype=torch.bfloat16)
+
+            image_inputs = image_processor(raw_image, return_tensors="pt")
+            image_list, image_sizes = image_inputs["pixel_values"], image_inputs["image_sizes"]
+            
+            image = torch.nested.nested_tensor(image_list[0]).to_padded_tensor(padding=-100)
+                
+            if input_text is None:
+                input_text = "Hi! What is in this image?"
+
+            # Pixtral prompt template: <s>[INST]USER_MSG_1[/INST]ASSISTANT_MSG_1</s>[INST]USER_MSG_2[/INST]ASSISTANT_MSG_2</s>
+            pre_prompt = "<s>[INST]"
+            post_prompt = f"{input_text}[/INST]"
+            
         elif self.model_type == "video-neva":
 
             image = self.video_preprocess(
@@ -1130,6 +1152,9 @@ class MultimodalModelRunner:
                 'llava_next'
         ]:
             if image.dim() == 5:
+                image = image.expand(self.args.batch_size, -1, -1, -1,
+                                     -1).contiguous()
+            elif image.dim() == 4:
                 image = image.expand(self.args.batch_size, -1, -1, -1,
                                      -1).contiguous()
             else:
